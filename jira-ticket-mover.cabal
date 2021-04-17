@@ -37,4 +37,6 @@ executable jira-ticket-mover
     , bytestring
     , utf8-string
     , aeson
+    , mtl
+    , transformers
   default-language: Haskell2010

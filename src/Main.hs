@@ -3,21 +3,33 @@
 module Main where
 
 import           Control.Lens
+import           Control.Monad.Except
+import           Control.Monad.Reader
+import           Control.Monad.Trans.Except
 import           Data.Aeson
-import qualified Data.ByteString.UTF8 as BSU
-import           Data.List            (find)
+import qualified Data.ByteString.UTF8       as BSU
+import           Data.List                  (find)
 import           Network.Wreq
-import           System.Environment   (lookupEnv)
-import           System.Exit          (ExitCode (ExitFailure), exitWith)
+import           System.Environment         (lookupEnv)
+import           System.Exit                (ExitCode (ExitFailure), exitWith)
+
+data Error = GetTransitionsFailure Int
+           | TransitionUnavailable String [Transition]
+           | TransitionFailure Int
+           deriving (Eq, Show)
+
+type MonadStack a = ExceptT Error (ReaderT JiraConfig IO) a
+
+---
 
 data TransitionsResponse = TransitionsResponse {
   transitions :: [Transition]
-} deriving (Show)
+} deriving (Eq, Show)
 
 data Transition = Transition {
   id   :: String,
   name :: String
-} deriving (Show)
+} deriving (Eq, Show)
 
 instance FromJSON TransitionsResponse where
   parseJSON = withObject "transitionResponse" $ \o ->
@@ -32,14 +44,50 @@ data JiraConfig = JiraConfig {
   jiraUrl        :: String
 }
 
+handleTicket :: String -> MonadStack ()
+handleTicket ticketId = do
+  transitions <- getTransitions ticketId
+  transition  <- except (findTransition "Shippable" transitions)
+  transitionTo transition ticketId
+
+getTransitions :: String -> MonadStack [Transition]
+getTransitions ticketId = do
+  baseUrl <- asks jiraUrl
+  options <- asks requestOptions
+  res <- lift . lift $ fmap decode <$> getWith options (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions")
+  case view (responseStatus . statusCode) res of
+    status | status /= 200 -> except $ Left $ GetTransitionsFailure status
+    _ -> do
+      -- TODO: handle this in a less hacky way
+      let (Just (TransitionsResponse transitions)) = view responseBody res
+      return transitions
+
+findTransition :: String -> [Transition] -> Either Error Transition
+findTransition state transitions = do
+  let maybeTransition = find ((==state) . name) transitions
+  case maybeTransition of
+    Nothing           -> Left $ TransitionUnavailable state transitions
+    (Just transition) -> Right $ transition
+
+transitionTo :: Transition -> String -> MonadStack ()
+transitionTo (Transition transitionId _) ticketId = do
+  let body = BSU.fromString $ "{\"transition\":{\"id\":\"" <> transitionId <> "\"}}"
+  baseUrl <- asks jiraUrl
+  options <- asks requestOptions
+  res <- lift . lift $ postWith options (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions") body
+  case view (responseStatus . statusCode) res of
+    status | status `div` 100 /= 2 -> except $ Left $ TransitionFailure status
+    _                              -> return ()
+
+
 main :: IO ()
 main = do
-  config <- getJiraConfig
+  jiraConfig <- getJiraConfig
   let ticketId = "EXP-392"
-
-  transitions <- getTransitions config ticketId
-  -- transitionTo config transitions "Shippable" ticketId
-  transitionTo config transitions "Done" ticketId
+  result <- runReaderT (runExceptT (handleTicket ticketId)) jiraConfig
+  case result of
+    Left err -> print err
+    Right _  -> putStrLn "succes \\o/"
 
 getEnvVariableOrExit :: String -> IO String
 getEnvVariableOrExit varName = do
@@ -67,28 +115,3 @@ getJiraConfig = do
       jiraUrl = jiraUrl,
       requestOptions = set (header "Content-Type") (["application/json"]) opts
     }
-
-getTransitions :: JiraConfig -> String -> IO [Transition]
-getTransitions config ticketId = do
-  res <- fmap decode <$> getWith (requestOptions config) (jiraUrl config <> "/rest/api/2/issue/" <> ticketId <> "/transitions")
-  case view (responseStatus . statusCode) res of
-    status | status /= 200 -> do
-      putStrLn ("failed to get transitions, status: " <> show status)
-      exitWith (ExitFailure 1)
-    status -> do
-      -- TODO: handle this in a less hacky way
-      let (Just (TransitionsResponse transitions)) = view responseBody res
-      return transitions
-
-transitionTo :: JiraConfig -> [Transition] -> String -> String -> IO ()
-transitionTo config transitions state ticketId = do
-  let maybeTransition = find ((==state) . name) transitions
-  case maybeTransition of
-    Nothing -> do
-      print "desired transition not available"
-      exitWith (ExitFailure 1)
-    Just (Transition transitionId _) -> do
-      let body = BSU.fromString $ "{\"transition\":{\"id\":\"" <> transitionId <> "\"}}"
-      res <- postWith (requestOptions config) (jiraUrl config <> "/rest/api/2/issue/" <> ticketId <> "/transitions") body
-      print res
-
