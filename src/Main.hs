@@ -13,6 +13,9 @@ import           Network.Wreq
 import           System.Environment         (lookupEnv)
 import           System.Exit                (ExitCode (ExitFailure), exitWith)
 
+data ConfigError = MissingEnvVar String
+                 deriving (Show)
+
 data Error = GetTransitionsFailure Int
            | TransitionUnavailable String [Transition]
            | TransitionFailure Int
@@ -79,36 +82,39 @@ transitionTo (Transition transitionId _) ticketId = do
     status | status `div` 100 /= 2 -> except $ Left $ TransitionFailure status
     _                              -> return ()
 
-
 main :: IO ()
 main = do
-  jiraConfig <- getJiraConfig
-  let ticketId = "EXP-392"
-  result <- runReaderT (runExceptT (handleTicket ticketId)) jiraConfig
-  case result of
-    Left err -> print err
-    Right _  -> putStrLn "succes \\o/"
-
-getEnvVariableOrExit :: String -> IO String
-getEnvVariableOrExit varName = do
-  maybeVar <- lookupEnv varName
-  case maybeVar of
-    Nothing -> do
-      putStrLn (varName <> " env variable missing, exiting")
+  maybeConfig <- runExceptT getJiraConfig
+  case maybeConfig of
+    Left err         -> do
+      print err
       exitWith (ExitFailure 1)
-    (Just var) -> do
-      return var
+    Right jiraConfig -> do
+      let ticketId = "EXP-392"
+      result <- flip runReaderT jiraConfig . runExceptT $ handleTicket ticketId
+      case result of
+        Left err ->  do
+          print err
+          exitWith (ExitFailure 1)
+        Right _  -> putStrLn "succes \\o/"
 
-getJiraCredentialsOrExit :: IO (BSU.ByteString, BSU.ByteString)
-getJiraCredentialsOrExit = do
-  jiraUsername <- getEnvVariableOrExit "JIRA_USERNAME"
-  jiraPassword <- getEnvVariableOrExit "JIRA_PASSWORD"
+getEnvVariable :: String -> ExceptT ConfigError IO String
+getEnvVariable varName = do
+  maybeVar <- lift $ lookupEnv varName
+  case maybeVar of
+    Nothing    -> except $ Left $ MissingEnvVar varName
+    (Just var) -> return var
+
+getJiraCredentials :: ExceptT ConfigError IO (BSU.ByteString, BSU.ByteString)
+getJiraCredentials = do
+  jiraUsername <- getEnvVariable "JIRA_USERNAME"
+  jiraPassword <- getEnvVariable "JIRA_PASSWORD"
   return (BSU.fromString jiraUsername, BSU.fromString jiraPassword)
 
-getJiraConfig :: IO JiraConfig
+getJiraConfig :: ExceptT ConfigError IO JiraConfig
 getJiraConfig = do
-  jiraUrl <- getEnvVariableOrExit "JIRA_URL"
-  (jiraUsername, jiraPassword) <- getJiraCredentialsOrExit
+  jiraUrl <- getEnvVariable "JIRA_URL"
+  (jiraUsername, jiraPassword) <- getJiraCredentials
   let opts = set auth (Just (basicAuth jiraUsername jiraPassword)) defaults
 
   return JiraConfig {
