@@ -23,6 +23,7 @@ main = do
       print err
       exitWith (ExitFailure 1)
     Right config -> do
+      putStrLn "running on port 8080"
       run 8080 (app config)
 
 app :: Config -> Application

@@ -33,7 +33,8 @@ parseCommits requestBody = do
   branch  <- M.lookup "ref" body >>= str
   commits <- M.lookup "commits" body >>= arr
   commitMessages <- traverse (obj >=> M.lookup "message" >=> str) commits
-  return (CommitInfo branch commitMessages)
+  -- dropping the first 11 characters to get rid of "refs/heads/"
+  return (CommitInfo (drop 11 branch) commitMessages)
 
 obj :: Value -> Maybe (M.HashMap T.Text Value)
 obj (Object o) = Just o
