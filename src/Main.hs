@@ -17,8 +17,9 @@ main = do
       print err
       exitWith (ExitFailure 1)
     Right jiraConfig -> do
-      let ticketId = "EXP-392"
-      result <- flip runReaderT jiraConfig . runExceptT $ handleTicket ticketId
+      let commitMessage = "[EXP-392] did some stuff"
+      let branch = "develop"
+      result <- flip runReaderT jiraConfig . runExceptT $ handleTicket branch commitMessage
       case result of
         Left err ->  do
           print err

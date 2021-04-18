@@ -40,4 +40,5 @@ executable jira-ticket-mover
     , mtl
     , transformers
     , containers
+    , regex-pcre
   default-language: Haskell2010

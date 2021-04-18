@@ -13,6 +13,7 @@ import           Data.Aeson
 import qualified Data.ByteString.UTF8       as BSU
 import           Data.List                  (find)
 import           Network.Wreq
+import           Text.Regex.PCRE
 
 import           Config                     (Config (..))
 
@@ -40,11 +41,29 @@ instance FromJSON Transition where
   parseJSON = withObject "transition" $ \o ->
     Transition <$> o .: "id" <*> o .: "name"
 
-handleTicket :: String -> MonadStack ()
-handleTicket ticketId = do
-  transitions <- getTransitions ticketId
-  transition  <- except (findTransition "Shippable" transitions)
-  transitionTo transition ticketId
+handleTicket :: String -> String -> MonadStack ()
+handleTicket branch commitMessage = do
+  getDesiredColumn <- asks $ desiredColumn
+  case getTicketIdAndJiraColumn (getDesiredColumn branch) commitMessage of
+    Nothing -> return ()
+    Just (ticketId, jiraColumn) -> do
+      transitions <- getTransitions ticketId
+      transition  <- except (findTransition jiraColumn transitions)
+      transitionTo transition ticketId
+
+getTicketIdAndJiraColumn :: (String -> Maybe String) -> String -> Maybe (String, String)
+getTicketIdAndJiraColumn getDesiredColumn commitMessage = do
+  (ticketId, projectPrefix) <- parseTicketInfo commitMessage
+  jiraColumn <- getDesiredColumn projectPrefix
+  return (ticketId, jiraColumn)
+
+parseTicketInfo :: String -> Maybe (String, String)
+parseTicketInfo commitMessage =
+  case commitMessage =~ regex of
+    ((_:ticketId:projectPrefix:_):_) -> Just (ticketId, projectPrefix)
+    _                                -> Nothing
+  where
+    regex = "^ *\\[(([a-zA-Z]+)-\\d+)\\]"::String
 
 getTransitions :: String -> MonadStack [Transition]
 getTransitions ticketId = do
