@@ -10,16 +10,23 @@ module Config (
 import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.Trans.Except
+import           Data.Aeson
+import qualified Data.ByteString.Lazy       as BS
+import qualified Data.ByteString.Lazy.Char8 as BSC8
 import qualified Data.ByteString.UTF8       as BSU
+import           Data.Char                  (toLower)
+import qualified Data.Map.Strict            as M
 import           Network.Wreq
 import           System.Environment         (lookupEnv)
 
 data Config = Config {
   requestOptions :: Network.Wreq.Options,
-  jiraUrl        :: String
+  jiraUrl        :: String,
+  desiredColumn  :: String -> String -> Maybe String
 }
 
 data ConfigError = MissingEnvVar String
+                 | BranchColumnMappingParseError String
                  deriving (Show)
 
 getEnvVariable :: String -> ExceptT ConfigError IO String
@@ -35,13 +42,23 @@ getJiraCredentials = do
   jiraPassword <- getEnvVariable "JIRA_PASSWORD"
   return (BSU.fromString jiraUsername, BSU.fromString jiraPassword)
 
+getBranchColumnMapping :: ExceptT ConfigError IO (String -> String -> Maybe String)
+getBranchColumnMapping = do
+  -- TODO: catch errors from `BS.readFile`. `catchE` from Control.Monad.Trans.Except ?
+  fileContents <- lift $ BS.readFile "./branch-column-mapping.json"
+  case decode fileContents of
+    Nothing   -> except $ Left $ BranchColumnMappingParseError (BSC8.unpack fileContents)
+    Just dict -> return $ \branch proj -> M.lookup (fmap toLower branch) dict >>= M.lookup (fmap toLower proj)
+
 getConfig :: ExceptT ConfigError IO Config
 getConfig = do
   jiraUrl <- getEnvVariable "JIRA_URL"
   (jiraUsername, jiraPassword) <- getJiraCredentials
   let opts = set auth (Just (basicAuth jiraUsername jiraPassword)) defaults
+  branchColumnMapping <- getBranchColumnMapping
 
   return Config {
       jiraUrl = jiraUrl,
-      requestOptions = set (header "Content-Type") (["application/json"]) opts
+      requestOptions = set (header "Content-Type") (["application/json"]) opts,
+      desiredColumn = branchColumnMapping
     }

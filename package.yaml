@@ -28,18 +28,7 @@ library:
 executables:
   jira-ticket-mover-exe:
     main:                Main.hs
-    source-dirs:         app
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - jira-ticket-mover
-
-tests:
-  jira-ticket-mover-test:
-    main:                Spec.hs
-    source-dirs:         test
+    source-dirs:         src
     ghc-options:
     - -threaded
     - -rtsopts

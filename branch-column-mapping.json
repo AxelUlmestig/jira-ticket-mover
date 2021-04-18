@@ -1,0 +1,8 @@
+{
+  "develop": {
+    "exp": "Shippable"
+  },
+  "master": {
+    "exp": "Done"
+  }
+}
