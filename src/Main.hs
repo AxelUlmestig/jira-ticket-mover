@@ -27,10 +27,9 @@ main = do
       run 8080 (app config)
 
 app :: Config -> Application
-app config Request{requestMethod="POST", rawPathInfo="/", requestBody=ioBody} respond = do
-  -- TODO: body is just a chunk of the total body. Figure out how to get it all
-  body <- ioBody
-  case parseCommits (LBS.fromStrict body) of
+app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
+  body <- consumeRequestBodyLazy req
+  case parseCommits body of
     Nothing                           -> respond $ responseLBS status400 [] ""
     Just (CommitInfo branch messages) -> do
       flip traverse messages (\commitMessage -> do
