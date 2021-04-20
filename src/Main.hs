@@ -2,6 +2,7 @@
 
 module Main where
 
+import           Control.Concurrent       (forkIO)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import qualified Data.ByteString.Lazy     as LBS
@@ -32,7 +33,7 @@ app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
   case parseCommits body of
     Nothing                           -> respond $ responseLBS status400 [] ""
     Just (CommitInfo branch messages) -> do
-      flip traverse messages (\commitMessage -> do
+      flip traverse messages (\commitMessage -> forkIO $ do
           result <- flip runReaderT config . runExceptT $ handleTicket branch commitMessage
           logTicketHandlingresult result
         )
