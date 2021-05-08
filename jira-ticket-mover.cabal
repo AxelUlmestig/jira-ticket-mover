@@ -47,4 +47,5 @@ executable jira-ticket-mover
     , text
     , unordered-containers
     , vector
+    , cryptohash-sha256
   default-language: Haskell2010
