@@ -10,8 +10,8 @@ RUN apt install -y libpcre3 libpcre3-dev
 
 RUN stack setup
 # # static linking to be able to copy to 'scratch'
-# RUN stack build \
-#   --only-dependencies \
+RUN stack build \
+  --only-dependencies
 #   --ghc-options '-static -O2 -optc-static -optl-static -optl-pthread'
 
 COPY . /jira-ticket-mover/
