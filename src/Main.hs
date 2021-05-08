@@ -2,19 +2,23 @@
 
 module Main where
 
-import           Control.Concurrent       (forkIO)
+import           Control.Concurrent        (forkIO)
 import           Control.Monad.Except
 import           Control.Monad.Reader
-import qualified Data.ByteString.Lazy     as LBS
+import           Crypto.Hash.SHA256        (hmac)
+import qualified Data.ByteString           as BS
+import           Data.ByteString.Builder   (byteStringHex, toLazyByteString)
+import qualified Data.ByteString.Lazy      as LBS
+import           Data.ByteString.Lazy.UTF8 (fromString)
 import           Network.HTTP.Types
 import           Network.Wai
-import           Network.Wai.Handler.Warp (run)
+import           Network.Wai.Handler.Warp  (run)
 import           Network.Wai.Internal
-import           System.Exit              (ExitCode (ExitFailure), exitWith)
+import           System.Exit               (ExitCode (ExitFailure), exitWith)
 
-import           Config                   (Config (..), getConfig)
-import           HandleTicket             (Error (..), handleTicket)
-import           ParseCommits             (CommitInfo (..), parseCommits)
+import           Config                    (Config (..), getConfig)
+import           HandleTicket              (Error (..), handleTicket)
+import           ParseCommits              (CommitInfo (..), parseCommits)
 
 main :: IO ()
 main = do
@@ -30,16 +34,30 @@ main = do
 app :: Config -> Application
 app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
   body <- consumeRequestBodyLazy req
-  case parseCommits body of
-    Nothing                           -> respond $ responseLBS status400 [] ""
-    Just (CommitInfo branch messages) -> do
-      flip traverse messages (\commitMessage -> forkIO $ do
-          result <- flip runReaderT config . runExceptT $ handleTicket branch commitMessage
-          logTicketHandlingresult result
-        )
-      respond $ responseLBS status200 [] ""
+  if getGitHubSignature req /= Just (hmacBody (secret config) (LBS.toStrict body))
+    -- then respond $ responseLBS status401 [] ""
+    then respond $ responseLBS status401 [] (fromString (show ((getGitHubSignature req, hmacBody (secret config) (LBS.toStrict body)))))
+  else
+    case parseCommits body of
+      Nothing                           -> respond $ responseLBS status400 [] ""
+      Just (CommitInfo branch messages) -> do
+        flip traverse messages (\commitMessage -> forkIO $ do
+            result <- flip runReaderT config . runExceptT $ handleTicket branch commitMessage
+            logTicketHandlingresult result
+          )
+        respond $ responseLBS status200 [] ""
 app _ _ respond = respond $ responseLBS status404 [] ""
 
 logTicketHandlingresult :: Either Error () -> IO ()
 logTicketHandlingresult (Left err) = print err
 logTicketHandlingresult (Right ()) = return ()
+
+getGitHubSignature :: Request -> Maybe BS.ByteString
+getGitHubSignature = lookup "X-Hub-Signature-256" . requestHeaders
+
+hmacBody :: BS.ByteString -> BS.ByteString -> BS.ByteString
+hmacBody sec body =
+  let
+    hex = LBS.toStrict $ toLazyByteString $ byteStringHex $ hmac sec body
+  in
+    "sha256=" <> hex
