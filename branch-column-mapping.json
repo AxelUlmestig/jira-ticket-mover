@@ -2,11 +2,13 @@
   "develop": {
     "exp": "Shippable",
     "growth": "Shippable",
-    "pa": "Shippable"
+    "pa": "Shippable",
+    "pro": "Shippable"
   },
   "master": {
     "exp": "Done",
     "growth": "Done",
-    "pa": "Done"
+    "pa": "Done",
+    "pro": "Done"
   }
 }
