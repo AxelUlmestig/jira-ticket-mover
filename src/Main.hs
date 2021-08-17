@@ -15,7 +15,8 @@ import qualified Network.Wreq.Session     as S
 import           System.Exit              (ExitCode (ExitFailure), exitWith)
 
 import           Config                   (Config (..), getConfig)
-import           HandleTicket             (Error (..), handleTicket)
+import           HandleTicket             (Error (..), TicketResult (..),
+                                           handleTicket)
 import           ParseCommits             (CommitInfo (..), parseCommits)
 
 main :: IO ()
@@ -44,6 +45,7 @@ app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
       respond $ responseLBS status200 [] ""
 app _ _ respond = respond $ responseLBS status404 [] ""
 
-logTicketHandlingresult :: Either Error () -> IO ()
+logTicketHandlingresult :: Either Error TicketResult -> IO ()
 logTicketHandlingresult (Left err) = print err
-logTicketHandlingresult (Right ()) = return ()
+logTicketHandlingresult (Right (MovedTicket ticketId columnName)) = putStrLn $ "moved " <> ticketId <> " to " <> columnName
+logTicketHandlingresult (Right (NoDesiredColumnFound branchName commitMessage)) = putStrLn $ "no desired state found, branch: '" <> branchName <> "', commit message: '" <> commitMessage <> "'"

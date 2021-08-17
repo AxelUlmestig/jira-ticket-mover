@@ -2,7 +2,8 @@
 
 module HandleTicket (
   handleTicket,
-  Error(..)
+  Error(..),
+  TicketResult(..)
 ) where
 
 import           Control.Lens
@@ -18,8 +19,18 @@ import           Text.Regex.PCRE
 
 import           Config                     (Config (..))
 
+type TicketId = String
+type ColumnName = String
+type CommitMessage = String
+type BranchName = String
+type ProjectPrefix = String
+
+data TicketResult = MovedTicket TicketId ColumnName
+                  | NoDesiredColumnFound BranchName CommitMessage
+                  deriving (Eq, Show)
+
 data Error = GetTransitionsFailure Int
-           | TransitionUnavailable String [Transition]
+           | TransitionUnavailable ColumnName [Transition]
            | TransitionFailure Int
            deriving (Eq, Show)
 
@@ -31,7 +42,7 @@ newtype TransitionsResponse = TransitionsResponse {
 
 data Transition = Transition {
   id   :: String,
-  name :: String
+  name :: ColumnName
 } deriving (Eq, Show)
 
 instance FromJSON TransitionsResponse where
@@ -42,23 +53,23 @@ instance FromJSON Transition where
   parseJSON = withObject "transition" $ \o ->
     Transition <$> o .: "id" <*> o .: "name"
 
-handleTicket :: String -> String -> MonadStack ()
+handleTicket :: ColumnName -> CommitMessage -> MonadStack TicketResult
 handleTicket branch commitMessage = do
   getDesiredColumn <- asks desiredColumn
   case getTicketIdAndJiraColumn (getDesiredColumn branch) commitMessage of
-    Nothing -> return ()
+    Nothing -> return $ NoDesiredColumnFound branch commitMessage
     Just (ticketId, jiraColumn) -> do
       transitions <- getTransitions ticketId
       transition  <- except (findTransition jiraColumn transitions)
       transitionTo transition ticketId
 
-getTicketIdAndJiraColumn :: (String -> Maybe String) -> String -> Maybe (String, String)
+getTicketIdAndJiraColumn :: (ProjectPrefix -> Maybe ColumnName) -> CommitMessage -> Maybe (TicketId, ColumnName)
 getTicketIdAndJiraColumn getDesiredColumn commitMessage = do
   (ticketId, projectPrefix) <- parseTicketInfo commitMessage
   jiraColumn <- getDesiredColumn projectPrefix
   return (ticketId, jiraColumn)
 
-parseTicketInfo :: String -> Maybe (String, String)
+parseTicketInfo :: CommitMessage -> Maybe (TicketId, ProjectPrefix)
 parseTicketInfo commitMessage =
   case commitMessage =~ regex of
     ((_:ticketId:projectPrefix:_):_) -> Just (ticketId, projectPrefix)
@@ -66,7 +77,7 @@ parseTicketInfo commitMessage =
   where
     regex = "^ *\\[(([a-zA-Z]+)-\\d+)\\]"::String
 
-getTransitions :: String -> MonadStack [Transition]
+getTransitions :: TicketId -> MonadStack [Transition]
 getTransitions ticketId = do
   baseUrl <- asks jiraUrl
   options <- asks requestOptions
@@ -79,15 +90,15 @@ getTransitions ticketId = do
       let (Just (TransitionsResponse transitions)) = view responseBody res
       return transitions
 
-findTransition :: String -> [Transition] -> Either Error Transition
+findTransition :: ColumnName -> [Transition] -> Either Error Transition
 findTransition state transitions = do
   let maybeTransition = find ((==state) . name) transitions
   case maybeTransition of
     Nothing           -> Left $ TransitionUnavailable state transitions
     (Just transition) -> Right transition
 
-transitionTo :: Transition -> String -> MonadStack ()
-transitionTo (Transition transitionId _) ticketId = do
+transitionTo :: Transition -> TicketId -> MonadStack TicketResult
+transitionTo (Transition transitionId state) ticketId = do
   let body = BSU.fromString $ "{\"transition\":{\"id\":\"" <> transitionId <> "\"}}"
   baseUrl <- asks jiraUrl
   options <- asks requestOptions
@@ -95,5 +106,5 @@ transitionTo (Transition transitionId _) ticketId = do
   res <- lift . lift $ S.postWith options session (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions") body
   case view (responseStatus . statusCode) res of
     status | status `div` 100 /= 2 -> except $ Left $ TransitionFailure status
-    _                              -> return ()
+    _                              -> return $ MovedTicket ticketId state
 
