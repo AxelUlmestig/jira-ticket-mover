@@ -27,6 +27,9 @@ source-repository head
 executable jira-ticket-mover
   main-is: Main.hs
   other-modules:
+      Config
+    , HandleTicket
+    , ParseCommits
   hs-source-dirs:
       src
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -O2

@@ -13,6 +13,7 @@ import           Data.Aeson
 import qualified Data.ByteString.UTF8       as BSU
 import           Data.List                  (find)
 import           Network.Wreq
+import qualified Network.Wreq.Session       as S
 import           Text.Regex.PCRE
 
 import           Config                     (Config (..))
@@ -22,9 +23,9 @@ data Error = GetTransitionsFailure Int
            | TransitionFailure Int
            deriving (Eq, Show)
 
-type MonadStack a = ExceptT Error (ReaderT Config IO) a
+type MonadStack a = ExceptT Error (ReaderT (Config S.Session) IO) a
 
-data TransitionsResponse = TransitionsResponse {
+newtype TransitionsResponse = TransitionsResponse {
   transitions :: [Transition]
 } deriving (Eq, Show)
 
@@ -43,7 +44,7 @@ instance FromJSON Transition where
 
 handleTicket :: String -> String -> MonadStack ()
 handleTicket branch commitMessage = do
-  getDesiredColumn <- asks $ desiredColumn
+  getDesiredColumn <- asks desiredColumn
   case getTicketIdAndJiraColumn (getDesiredColumn branch) commitMessage of
     Nothing -> return ()
     Just (ticketId, jiraColumn) -> do
@@ -69,7 +70,8 @@ getTransitions :: String -> MonadStack [Transition]
 getTransitions ticketId = do
   baseUrl <- asks jiraUrl
   options <- asks requestOptions
-  res <- lift . lift $ fmap decode <$> getWith options (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions")
+  session <- asks httpSession
+  res <- lift . lift $ fmap decode <$> S.getWith options session (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions")
   case view (responseStatus . statusCode) res of
     status | status /= 200 -> except $ Left $ GetTransitionsFailure status
     _ -> do
@@ -82,14 +84,15 @@ findTransition state transitions = do
   let maybeTransition = find ((==state) . name) transitions
   case maybeTransition of
     Nothing           -> Left $ TransitionUnavailable state transitions
-    (Just transition) -> Right $ transition
+    (Just transition) -> Right transition
 
 transitionTo :: Transition -> String -> MonadStack ()
 transitionTo (Transition transitionId _) ticketId = do
   let body = BSU.fromString $ "{\"transition\":{\"id\":\"" <> transitionId <> "\"}}"
   baseUrl <- asks jiraUrl
   options <- asks requestOptions
-  res <- lift . lift $ postWith options (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions") body
+  session <- asks httpSession
+  res <- lift . lift $ S.postWith options session (baseUrl <> "/rest/api/2/issue/" <> ticketId <> "/transitions") body
   case view (responseStatus . statusCode) res of
     status | status `div` 100 /= 2 -> except $ Left $ TransitionFailure status
     _                              -> return ()

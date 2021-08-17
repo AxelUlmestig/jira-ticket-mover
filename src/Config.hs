@@ -19,10 +19,11 @@ import qualified Data.Map.Strict            as M
 import           Network.Wreq
 import           System.Environment         (lookupEnv)
 
-data Config = Config {
+data Config a = Config {
   requestOptions :: Network.Wreq.Options,
   jiraUrl        :: String,
-  desiredColumn  :: String -> String -> Maybe String
+  desiredColumn  :: String -> String -> Maybe String,
+  httpSession    :: a
 }
 
 data ConfigError = MissingEnvVar String
@@ -50,7 +51,7 @@ getBranchColumnMapping = do
     Nothing   -> except $ Left $ BranchColumnMappingParseError (BSC8.unpack fileContents)
     Just dict -> return $ \branch proj -> M.lookup (fmap toLower branch) dict >>= M.lookup (fmap toLower proj)
 
-getConfig :: ExceptT ConfigError IO Config
+getConfig :: ExceptT ConfigError IO (Config ())
 getConfig = do
   jiraUrl <- getEnvVariable "JIRA_URL"
   (jiraUsername, jiraPassword) <- getJiraCredentials
@@ -59,6 +60,7 @@ getConfig = do
 
   return Config {
       jiraUrl = jiraUrl,
-      requestOptions = set (header "Content-Type") (["application/json"]) opts,
-      desiredColumn = branchColumnMapping
+      requestOptions = set (header "Content-Type") ["application/json"] opts,
+      desiredColumn = branchColumnMapping,
+      httpSession = ()
     }

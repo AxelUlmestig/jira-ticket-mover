@@ -6,10 +6,12 @@ import           Control.Concurrent       (forkIO)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import qualified Data.ByteString.Lazy     as LBS
+import           Data.Foldable            (traverse_)
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp (run)
 import           Network.Wai.Internal
+import qualified Network.Wreq.Session     as S
 import           System.Exit              (ExitCode (ExitFailure), exitWith)
 
 import           Config                   (Config (..), getConfig)
@@ -27,16 +29,18 @@ main = do
       putStrLn "running on port 8080"
       run 8080 (app config)
 
-app :: Config -> Application
+app :: Config () -> Application
 app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
   body <- consumeRequestBodyLazy req
   case parseCommits body of
     Nothing                           -> respond $ responseLBS status400 [] ""
     Just (CommitInfo branch messages) -> do
-      flip traverse messages (\commitMessage -> forkIO $ do
-          result <- flip runReaderT config . runExceptT $ handleTicket branch commitMessage
+      session <- S.newAPISession
+      traverse_ (\commitMessage -> forkIO $ do
+          let config' = config { httpSession = session }
+          result <- flip runReaderT config' . runExceptT $ handleTicket branch commitMessage
           logTicketHandlingresult result
-        )
+        ) messages
       respond $ responseLBS status200 [] ""
 app _ _ respond = respond $ responseLBS status404 [] ""
 
