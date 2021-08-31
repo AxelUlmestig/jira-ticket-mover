@@ -29,7 +29,6 @@ executable jira-ticket-mover
   other-modules:
       Config
     , HandleTicket
-    , ParseCommits
   hs-source-dirs:
       src
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -O2
@@ -44,10 +43,9 @@ executable jira-ticket-mover
     , transformers
     , containers
     , regex-pcre
-    , wai
     , warp
-    , http-types
     , text
     , unordered-containers
-    , vector
+    , servant >= 0.18 && < 0.19
+    , servant-server >= 0.18 && < 0.19
   default-language: Haskell2010

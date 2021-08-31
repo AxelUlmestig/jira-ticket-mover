@@ -1,51 +1,73 @@
+{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators     #-}
 
 module Main where
 
 import           Control.Concurrent       (forkIO)
-import           Control.Monad.Except
-import           Control.Monad.Reader
+import           Control.Monad.Except     (runExceptT)
+import           Control.Monad.IO.Class   (liftIO)
+import           Control.Monad.Reader     (runReaderT)
+import           Data.Aeson               (FromJSON)
 import qualified Data.ByteString.Lazy     as LBS
 import           Data.Foldable            (traverse_)
-import           Network.HTTP.Types
-import           Network.Wai
+import           GHC.Generics             (Generic)
 import           Network.Wai.Handler.Warp (run)
-import           Network.Wai.Internal
 import qualified Network.Wreq.Session     as S
+import           Servant                  (Application, Proxy (Proxy), Server,
+                                           serve)
+import           Servant.API              (Capture, JSON, NoContent (..), Post,
+                                           QueryParam, ReqBody, (:<|>), (:>))
 import           System.Exit              (ExitCode (ExitFailure), exitWith)
 
 import           Config                   (Config (..), getConfig)
-import           HandleTicket             (Error (..), TicketResult (..),
-                                           handleTicket)
-import           ParseCommits             (CommitInfo (..), parseCommits)
+import           HandleTicket             (Commit (..), Error (..),
+                                           TicketResult (..), handleTicket)
+
+type API = ReqBody '[JSON] CommitInfo :> Post '[JSON] NoContent
+
+data CommitInfo = CommitInfo
+                 { ref     :: String
+                 , commits :: [Commit]
+                 }
+                 deriving (Show, Generic)
+
+instance FromJSON CommitInfo
+
+commitAPI :: Proxy API
+commitAPI = Proxy
+
+app :: Config () -> Application
+app = serve commitAPI . server
+
+server :: Config () -> Server API
+server config (CommitInfo branch commits) = do
+  -- dropping the first 11 characters to get rid of "refs/heads/"
+  let branchName = drop 11 branch
+  session <- liftIO S.newAPISession
+
+  liftIO $ traverse_ (\commitMessage -> forkIO $ do
+      let config' = config { httpSession = session }
+      result <- flip runReaderT config' . runExceptT $ handleTicket branchName commitMessage
+      logTicketHandlingresult result
+    ) commits
+
+  return NoContent
 
 main :: IO ()
 main = do
   maybeConfig <- runExceptT getConfig
   case maybeConfig of
-    Left err         -> do
+    Left err     -> do
       print err
       exitWith (ExitFailure 1)
     Right config -> do
       putStrLn "running on port 8080"
       run 8080 (app config)
 
-app :: Config () -> Application
-app config req@Request{requestMethod="POST", rawPathInfo="/"} respond = do
-  body <- consumeRequestBodyLazy req
-  case parseCommits body of
-    Nothing                           -> respond $ responseLBS status400 [] ""
-    Just (CommitInfo branch messages) -> do
-      session <- S.newAPISession
-      traverse_ (\commitMessage -> forkIO $ do
-          let config' = config { httpSession = session }
-          result <- flip runReaderT config' . runExceptT $ handleTicket branch commitMessage
-          logTicketHandlingresult result
-        ) messages
-      respond $ responseLBS status200 [] ""
-app _ _ respond = respond $ responseLBS status404 [] ""
-
 logTicketHandlingresult :: Either Error TicketResult -> IO ()
 logTicketHandlingresult (Left err) = print err
 logTicketHandlingresult (Right (MovedTicket ticketId columnName)) = putStrLn $ "moved " <> ticketId <> " to " <> columnName
-logTicketHandlingresult (Right (NoDesiredColumnFound branchName commitMessage)) = putStrLn $ "no desired state found, branch: '" <> branchName <> "', commit message: '" <> commitMessage <> "'"
+logTicketHandlingresult (Right (NoDesiredColumnFound branchName (Commit message))) = putStrLn $ "no desired state found, branch: '" <> branchName <> "', commit message: '" <> message <> "'"

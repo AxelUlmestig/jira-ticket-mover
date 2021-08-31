@@ -1,9 +1,11 @@
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module HandleTicket (
   handleTicket,
   Error(..),
-  TicketResult(..)
+  TicketResult(..),
+  Commit(..)
 ) where
 
 import           Control.Lens
@@ -13,6 +15,7 @@ import           Control.Monad.Trans.Except
 import           Data.Aeson
 import qualified Data.ByteString.UTF8       as BSU
 import           Data.List                  (find)
+import           GHC.Generics               (Generic)
 import           Network.Wreq
 import qualified Network.Wreq.Session       as S
 import           Text.Regex.PCRE
@@ -21,12 +24,11 @@ import           Config                     (Config (..))
 
 type TicketId = String
 type ColumnName = String
-type CommitMessage = String
 type BranchName = String
 type ProjectPrefix = String
 
 data TicketResult = MovedTicket TicketId ColumnName
-                  | NoDesiredColumnFound BranchName CommitMessage
+                  | NoDesiredColumnFound BranchName Commit
                   deriving (Eq, Show)
 
 data Error = GetTransitionsFailure Int
@@ -53,7 +55,14 @@ instance FromJSON Transition where
   parseJSON = withObject "transition" $ \o ->
     Transition <$> o .: "id" <*> o .: "name"
 
-handleTicket :: ColumnName -> CommitMessage -> MonadStack TicketResult
+newtype Commit = Commit
+               { message :: String
+               }
+               deriving (Eq, Generic, Show)
+
+instance FromJSON Commit
+
+handleTicket :: ColumnName -> Commit -> MonadStack TicketResult
 handleTicket branch commitMessage = do
   getDesiredColumn <- asks desiredColumn
   case getTicketIdAndJiraColumn (getDesiredColumn branch) commitMessage of
@@ -63,15 +72,15 @@ handleTicket branch commitMessage = do
       transition  <- except (findTransition jiraColumn transitions)
       transitionTo transition ticketId
 
-getTicketIdAndJiraColumn :: (ProjectPrefix -> Maybe ColumnName) -> CommitMessage -> Maybe (TicketId, ColumnName)
-getTicketIdAndJiraColumn getDesiredColumn commitMessage = do
-  (ticketId, projectPrefix) <- parseTicketInfo commitMessage
+getTicketIdAndJiraColumn :: (ProjectPrefix -> Maybe ColumnName) -> Commit -> Maybe (TicketId, ColumnName)
+getTicketIdAndJiraColumn getDesiredColumn commit = do
+  (ticketId, projectPrefix) <- parseTicketInfo commit
   jiraColumn <- getDesiredColumn projectPrefix
   return (ticketId, jiraColumn)
 
-parseTicketInfo :: CommitMessage -> Maybe (TicketId, ProjectPrefix)
-parseTicketInfo commitMessage =
-  case commitMessage =~ regex of
+parseTicketInfo :: Commit -> Maybe (TicketId, ProjectPrefix)
+parseTicketInfo (Commit message) =
+  case message =~ regex of
     ((_:ticketId:projectPrefix:_):_) -> Just (ticketId, projectPrefix)
     _                                -> Nothing
   where
